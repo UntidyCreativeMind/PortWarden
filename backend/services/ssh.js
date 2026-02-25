@@ -81,8 +81,6 @@ class SSHService {
     async getUFWStatus() {
         try {
             await this.connect();
-            // Need sudo if connecting as non-root, but we assume root or passwordless sudo for simplicity
-            // UFW requires root privileges.
             const output = await this.execute('ufw status numbered');
             this.disconnect();
             return this.parseUFWStatus(output);
@@ -140,7 +138,6 @@ class SSHService {
     async deleteUFWRule(ruleId) {
         try {
             await this.connect();
-            // The output of \`ufw delete X\` expects a "y" confirmation. 
             // We can use \`--force\` to bypass it: \`ufw --force delete X\`
             await this.execute(`ufw --force delete ${ruleId}`);
             this.disconnect();
@@ -153,8 +150,6 @@ class SSHService {
     async getOpenPorts() {
         try {
             await this.connect();
-            // Get listening sockets. 
-            // ss -tulpn output looks like:
             // Netid State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process
             // tcp   LISTEN 0      4096   0.0.0.0:80         0.0.0.0:*         users:(("nginx",pid=123,fd=4))
             const output = await this.execute('ss -tulpn');
