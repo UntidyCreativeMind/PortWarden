@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  portwarden:
+    # Build directly from the main branch of the GitHub repository
+    build: https://github.com/UntidyCreativeMind/PortWarden.git#main
+    container_name: portwarden
+    restart: always
+    ports:
+      - "9876:3001"
+    volumes:
+      - portwarden-data:/app/backend/data
+      # Mount SSH keys if needed for host access
+      - ~/.ssh:/root/.ssh:ro
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - DB_PATH=/app/backend/data/database.sqlite
+      # We'll need host IP for SSH connection
+      - HOST_IP=172.17.0.1
+
+volumes:
+  portwarden-data:
