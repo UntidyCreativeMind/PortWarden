@@ -10,17 +10,28 @@ class SSHService {
     async connect() {
         return new Promise((resolve, reject) => {
             const settings = db.getSettings();
-            const { host_ip, ssh_username, ssh_key_path } = settings;
+            const { host_ip, ssh_username, ssh_password, ssh_key_path } = settings;
 
-            if (!host_ip || !ssh_username || !ssh_key_path) {
-                return reject(new Error('SSH settings incomplete'));
+            if (!host_ip || !ssh_username) {
+                return reject(new Error('SSH settings incomplete: Host IP and Username are required'));
             }
 
-            let privateKey;
-            try {
-                privateKey = fs.readFileSync(ssh_key_path);
-            } catch (err) {
-                return reject(new Error(`Failed to read SSH key at ${ssh_key_path}`));
+            const connectOptions = {
+                host: host_ip,
+                port: 22,
+                username: ssh_username
+            };
+
+            if (ssh_password) {
+                connectOptions.password = ssh_password;
+            } else if (ssh_key_path) {
+                try {
+                    connectOptions.privateKey = fs.readFileSync(ssh_key_path);
+                } catch (err) {
+                    return reject(new Error(`Failed to read SSH key at ${ssh_key_path}`));
+                }
+            } else {
+                return reject(new Error('SSH settings incomplete: Password or Key Path missing'));
             }
 
             this.client = new Client();
@@ -29,12 +40,7 @@ class SSHService {
                 resolve();
             }).on('error', (err) => {
                 reject(err);
-            }).connect({
-                host: host_ip,
-                port: 22,
-                username: ssh_username,
-                privateKey: privateKey
-            });
+            }).connect(connectOptions);
         });
     }
 

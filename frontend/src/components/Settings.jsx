@@ -7,6 +7,7 @@ const Settings = () => {
     const [settings, setSettings] = useState({
         host_ip: '',
         ssh_username: '',
+        ssh_password: '',
         ssh_key_path: '',
         portainer_url: '',
         portainer_token: ''
@@ -105,7 +106,7 @@ const Settings = () => {
             )}
 
             <div className="settings-grid">
-                {/* Settings Form */}
+                {/* Host Details Form */}
                 <div className="settings-card">
                     <h2 className="settings-section-title">Host Details</h2>
                     <form onSubmit={handleSaveSettings}>
@@ -137,6 +138,18 @@ const Settings = () => {
                         </div>
 
                         <div className="input-group">
+                            <label>SSH Password (Leave blank to use Key Path)</label>
+                            <input
+                                type="password"
+                                name="ssh_password"
+                                value={settings.ssh_password}
+                                onChange={handleChange}
+                                className="text-input"
+                                placeholder="••••••••"
+                            />
+                        </div>
+
+                        <div className="input-group">
                             <label>SSH Key Path</label>
                             <input
                                 type="text"
@@ -145,12 +158,24 @@ const Settings = () => {
                                 onChange={handleChange}
                                 className="text-input"
                                 placeholder="/root/.ssh/id_rsa"
-                                required
                             />
                         </div>
 
-                        <h2 className="settings-section-title" style={{ marginTop: '2rem' }}>Portainer Details</h2>
+                        <button
+                            type="submit"
+                            disabled={loading}
+                            className="btn-primary"
+                            style={{ marginTop: '1.5rem' }}
+                        >
+                            <Save size={16} /> Save Host Configuration
+                        </button>
+                    </form>
+                </div>
 
+                {/* Portainer Details Form */}
+                <div className="settings-card">
+                    <h2 className="settings-section-title">Portainer Details</h2>
+                    <form onSubmit={handleSaveSettings}>
                         <div className="input-group">
                             <label>Portainer URL</label>
                             <input
@@ -181,7 +206,7 @@ const Settings = () => {
                             className="btn-primary"
                             style={{ marginTop: '1.5rem' }}
                         >
-                            <Save size={16} /> Save Configuration
+                            <Save size={16} /> Save Portainer Configuration
                         </button>
                     </form>
                 </div>
