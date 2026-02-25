@@ -16,6 +16,7 @@ services:
       - NODE_ENV=production
       - PORT=3001
       - DB_PATH=/app/backend/data/database.sqlite
+      - JWT_SECRET=super_secret_temporary_key_for_dev
       # We'll need host IP for SSH connection
       - HOST_IP=172.17.0.1
 
