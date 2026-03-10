@@ -91,7 +91,7 @@ class SSHService {
     }
 
     parseUFWStatus(output) {
-        const lines = output.split('\\n');
+        const lines = output.split('\n');
         const rules = [];
         let isActive = false;
 
@@ -100,7 +100,7 @@ class SSHService {
                 isActive = true;
             }
             // Match rules like: [ 1] 80/tcp  ALLOW IN  Anywhere
-            const match = line.match(/^\\[\\s*(\\d+)\\]\\s+(\\S+)\\s+([A-Z\\s]+)\\s+(.*)$/);
+            const match = line.match(/^\[\s*(\d+)\]\s+(\S+)\s+([A-Z\s]+)\s+(.*)$/);
             if (match) {
                 const portProto = match[2];
                 let port, protocol = 'Any';
@@ -138,7 +138,7 @@ class SSHService {
     async deleteUFWRule(ruleId) {
         try {
             await this.connect();
-            // We can use \`--force\` to bypass it: \`sudo ufw --force delete X\`
+            // We can use `--force` to bypass it: `sudo ufw --force delete X`
             await this.execute(`sudo ufw --force delete ${ruleId}`);
             this.disconnect();
         } catch (err) {
@@ -162,12 +162,12 @@ class SSHService {
     }
 
     parseSSOutput(output) {
-        const lines = output.split('\\n').filter(l => l.trim() !== '' && !l.includes('Netid'));
+        const lines = output.split('\n').filter(l => l.trim() !== '' && !l.includes('Netid'));
         const ports = [];
 
         for (const line of lines) {
             // Very basic regex to split by whitespace but keep the final column together
-            const parts = line.trim().split(/\\s+/);
+            const parts = line.trim().split(/\s+/);
             if (parts.length >= 6) {
                 const netid = parts[0]; // tcp or udp
                 const state = parts[1]; // Should be LISTEN for tcp or UNCONN for udp
