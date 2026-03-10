@@ -12,6 +12,8 @@ services:
       - portwarden-data:/app/backend/data
       # Mount SSH keys if needed for host access
       - ~/.ssh:/root/.ssh:ro
+      # Mount Docker socket for native integration
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - NODE_ENV=production
       - PORT=3001

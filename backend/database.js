@@ -53,9 +53,7 @@ const defaultSettings = {
   host_ip: '172.17.0.1',
   ssh_username: 'root',
   ssh_password: '',
-  ssh_key_path: '/root/.ssh/id_rsa',
-  portainer_url: 'http://localhost:9000',
-  portainer_token: ''
+  ssh_key_path: '/root/.ssh/id_rsa'
 };
 
 const insertSetting = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');

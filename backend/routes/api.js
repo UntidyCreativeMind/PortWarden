@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import db from '../database.js';
 import sshService from '../services/ssh.js';
-import portainerService from '../services/portainer.js';
+import dockerService from '../services/docker.js';
 
 const router = express.Router();
 
@@ -81,9 +81,9 @@ router.get('/ports', authenticate, async (req, res) => {
         // 3. Get Docker Containers
         let containers = [];
         try {
-            containers = await portainerService.getContainers();
+            containers = await dockerService.getContainers();
         } catch (e) {
-            console.error('Failed to get Portainer containers (may not be configured):', e.message);
+            console.error('Failed to get Docker containers (check socket mount):', e.message);
         }
 
         // 4. Get Custom Names

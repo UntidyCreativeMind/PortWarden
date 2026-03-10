@@ -8,9 +8,7 @@ const Settings = () => {
         host_ip: '',
         ssh_username: '',
         ssh_password: '',
-        ssh_key_path: '',
-        portainer_url: '',
-        portainer_token: ''
+        ssh_key_path: ''
     });
 
     const [passwordForm, setPasswordForm] = useState({ newPassword: '', confirm: '' });
@@ -167,49 +165,12 @@ const Settings = () => {
                             className="btn-primary"
                             style={{ marginTop: '1.5rem' }}
                         >
-                            <Save size={16} /> Save Host Configuration
+                            <Save size={16} /> Save Settings
                         </button>
                     </form>
                 </div>
 
-                {/* Portainer Details Form */}
-                <div className="settings-card">
-                    <h2 className="settings-section-title">Portainer Details</h2>
-                    <form onSubmit={handleSaveSettings}>
-                        <div className="input-group">
-                            <label>Portainer URL</label>
-                            <input
-                                type="text"
-                                name="portainer_url"
-                                value={settings.portainer_url}
-                                onChange={handleChange}
-                                className="text-input"
-                                placeholder="http://localhost:9000"
-                            />
-                        </div>
 
-                        <div className="input-group">
-                            <label>Portainer API Token</label>
-                            <input
-                                type="password"
-                                name="portainer_token"
-                                value={settings.portainer_token}
-                                onChange={handleChange}
-                                className="text-input"
-                                placeholder="ptr_..."
-                            />
-                        </div>
-
-                        <button
-                            type="submit"
-                            disabled={loading}
-                            className="btn-primary"
-                            style={{ marginTop: '1.5rem' }}
-                        >
-                            <Save size={16} /> Save Portainer Configuration
-                        </button>
-                    </form>
-                </div>
 
                 {/* Change Password Form */}
                 <div className="settings-card" style={{ height: 'fit-content' }}>
