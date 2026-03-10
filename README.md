@@ -1,0 +1,1 @@
+Host Configuration: On the host machine you are monitoring via SSH, ensure the standard user you configured has the following added using visudo: username ALL=(ALL) NOPASSWD: /usr/sbin/ufw, /usr/sbin/ss
