@@ -100,74 +100,67 @@ router.get('/ports', authenticate, async (req, res) => {
         const customNames = db.getCustomNames();
 
         // 5. Cross reference
-        // Create a map of port to enrichment data
         const portMap = new Map();
 
-        // Initialize with open ports on host
+        const getInfo = (portStr) => {
+            const port = parseInt(portStr);
+            const key = `${port}`;
+            if (!portMap.has(key)) {
+                portMap.set(key, {
+                    port: port,
+                    protocols: [],
+                    state: 'inactive',
+                    processes: [],
+                    docker: null,
+                    ufwRules: [],
+                    customName: customNames.find(c => c.port === port)?.name || null
+                });
+            }
+            return portMap.get(key);
+        };
+
+        // Host open ports
         for (const op of openPorts) {
-            const key = `${op.port}-${op.protocol}`;
-            portMap.set(key, {
-                port: op.port,
-                protocol: op.protocol,
-                state: 'open on host',
-                process: op.process,
-                docker: null,
-                ufwRules: [],
-                customName: customNames.find(c => c.port === op.port && (c.protocol === op.protocol || c.protocol === 'Any'))?.name || null
-            });
+            const info = getInfo(op.port);
+            if (!info.protocols.includes(op.protocol)) info.protocols.push(op.protocol);
+            if (op.process && !info.processes.includes(op.process)) info.processes.push(op.process);
+            info.state = 'open on host';
         }
 
         // Map Docker containers to ports
         for (const container of containers) {
             for (const p of container.ports) {
                 if (p.publicPort) {
-                    const key = `${p.publicPort}-${p.type}`; // type is usually tcp or udp
-                    const info = portMap.get(key) || {
-                        port: p.publicPort,
-                        protocol: p.type,
-                        state: 'open in docker',
-                        process: null,
-                        docker: null,
-                        ufwRules: [],
-                        customName: customNames.find(c => c.port === p.publicPort && (c.protocol === p.type || c.protocol === 'Any'))?.name || null
-                    };
-
+                    const info = getInfo(p.publicPort);
+                    if (!info.protocols.includes(p.type)) info.protocols.push(p.type);
+                    info.state = 'open in docker';
                     info.docker = {
                         id: container.id,
                         name: container.name,
                         endpoint: container.endpointName
                     };
-
-                    portMap.set(key, info);
                 }
             }
         }
 
         // Attach UFW rules
         for (const rule of ufwStatus.rules) {
-            const portInt = parseInt(rule.to);
-            if (isNaN(portInt)) continue; // skip complex rules for now
+            let toStr = rule.to || '';
+            let parsedPort = parseInt(toStr.replace(/\(v6\)/g, '').trim());
+            if (isNaN(parsedPort)) continue;
 
-            const protocols = rule.protocol === 'Any' ? ['tcp', 'udp'] : [rule.protocol.toLowerCase()];
-
-            for (const proto of protocols) {
-                const key = `${portInt}-${proto}`;
-                const info = portMap.get(key) || {
-                    port: portInt,
-                    protocol: proto,
-                    state: 'ufw only',
-                    process: null,
-                    docker: null,
-                    ufwRules: [],
-                    customName: customNames.find(c => c.port === portInt && (c.protocol === proto || c.protocol === 'Any'))?.name || null
-                };
-
-                info.ufwRules.push(rule);
-                portMap.set(key, info);
-            }
+            const info = getInfo(parsedPort);
+            info.ufwRules.push(rule);
+            if (info.state === 'inactive') info.state = 'ufw only';
         }
 
-        const result = Array.from(portMap.values());
+        // Finalize for dashboard
+        const result = Array.from(portMap.values()).map(r => ({
+            ...r,
+            protocol: r.protocols.length === 0 ? 'Any' : (r.protocols.length > 1 ? 'Any' : r.protocols[0]),
+            process: r.processes.join(', ') || null
+        }));
+
         res.json({
             ufwActive: ufwStatus.active,
             ports: result

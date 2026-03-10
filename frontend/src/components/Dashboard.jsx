@@ -9,6 +9,7 @@ const Dashboard = ({ onLogout }) => {
     const [error, setError] = useState(null);
     const [editingPort, setEditingPort] = useState(null);
     const [editName, setEditName] = useState('');
+    const [manualPort, setManualPort] = useState('');
     const navigate = useNavigate();
 
     const fetchData = async () => {
@@ -46,8 +47,8 @@ const Dashboard = ({ onLogout }) => {
                     await api.post('/ufw/delete', { ruleId: rule.id });
                 }
             } else {
-                // Allow port
-                await api.post('/ufw/allow', { port: portObj.port, protocol: portObj.protocol });
+                // Allow port - FORCE "Any" protocol per user request
+                await api.post('/ufw/allow', { port: portObj.port, protocol: 'Any' });
             }
             fetchData();
         } catch (err) {
@@ -123,7 +124,7 @@ const Dashboard = ({ onLogout }) => {
                         </thead>
                         <tbody>
                             {data.ports.map((p) => {
-                                const key = `${p.port}-${p.protocol}`;
+                                const key = `${p.port}`;
                                 const isEditing = editingPort === key;
                                 const isAllowed = p.ufwRules.length > 0;
 
@@ -210,6 +211,51 @@ const Dashboard = ({ onLogout }) => {
                                     </tr>
                                 );
                             })}
+
+                            <tr className="manual-entry-row" style={{ backgroundColor: 'var(--bg-secondary)', borderTop: '2px dashed var(--border-color)' }}>
+                                <td>
+                                    <div className="port-cell">
+                                        <input
+                                            type="number"
+                                            className="name-input"
+                                            placeholder="Port (e.g. 8080)"
+                                            value={manualPort}
+                                            onChange={(e) => setManualPort(e.target.value)}
+                                            style={{ width: '110px' }}
+                                        />
+                                        <span className="port-proto" style={{ marginLeft: '12px' }}>Any</span>
+                                    </div>
+                                </td>
+                                <td>
+                                    <span className="unnamed">Manual Entry</span>
+                                </td>
+                                <td>
+                                    <span className="name-text unnamed">Inactive</span>
+                                </td>
+                                <td>
+                                    <div className="pill pill-blocked" style={{ opacity: 0.5 }}>
+                                        <span>Pending Rules</span>
+                                    </div>
+                                </td>
+                                <td style={{ textAlign: 'right' }}>
+                                    <button
+                                        onClick={async () => {
+                                            if (!manualPort) return;
+                                            try {
+                                                await api.post('/ufw/allow', { port: parseInt(manualPort), protocol: 'Any' });
+                                                setManualPort('');
+                                                fetchData();
+                                            } catch (err) {
+                                                alert('Failed to add rule');
+                                            }
+                                        }}
+                                        className="btn-toggle allow"
+                                        disabled={!manualPort}
+                                    >
+                                        Allow Port
+                                    </button>
+                                </td>
+                            </tr>
 
                             {data.ports.length === 0 && !loading && (
                                 <tr>
