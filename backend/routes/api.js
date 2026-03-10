@@ -73,10 +73,20 @@ router.post('/settings', authenticate, (req, res) => {
 router.get('/ports', authenticate, async (req, res) => {
     try {
         // 1. Get UFW rules
-        const ufwStatus = await sshService.getUFWStatus();
+        let ufwStatus = { active: false, rules: [] };
+        try {
+            ufwStatus = await sshService.getUFWStatus();
+        } catch (e) {
+            console.error('SSH Error getting UFW status:', e.message);
+        }
 
         // 2. Get Host Open Ports
-        const openPorts = await sshService.getOpenPorts();
+        let openPorts = [];
+        try {
+            openPorts = await sshService.getOpenPorts();
+        } catch (e) {
+            console.error('SSH Error getting Open Ports:', e.message);
+        }
 
         // 3. Get Docker Containers
         let containers = [];

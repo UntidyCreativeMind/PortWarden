@@ -49,9 +49,7 @@ class SSHService {
             if (!this.client) {
                 return reject(new Error('Not connected to SSH'));
             }
-
-            // We must request a pseudo-tty (pty) because `sudo` usually requires it, even with NOPASSWD in sudoers
-            this.client.exec(command, { pty: true }, (err, stream) => {
+            this.client.exec(command, (err, stream) => {
                 if (err) return reject(err);
 
                 let output = '';
@@ -82,7 +80,7 @@ class SSHService {
     async getUFWStatus() {
         try {
             await this.connect();
-            const output = await this.execute('sudo ufw status numbered');
+            const output = await this.execute('sudo -n ufw status numbered');
             this.disconnect();
             return this.parseUFWStatus(output);
         } catch (err) {
@@ -128,7 +126,7 @@ class SSHService {
         try {
             await this.connect();
             const protoSuffix = protocol && protocol !== 'Any' ? `/${protocol}` : '';
-            await this.execute(`sudo ufw allow ${port}${protoSuffix}`);
+            await this.execute(`sudo -n ufw allow ${port}${protoSuffix}`);
             this.disconnect();
         } catch (err) {
             if (this.client) this.disconnect();
@@ -140,7 +138,7 @@ class SSHService {
         try {
             await this.connect();
             // We can use `--force` to bypass it: `sudo ufw --force delete X`
-            await this.execute(`sudo ufw --force delete ${ruleId}`);
+            await this.execute(`sudo -n ufw --force delete ${ruleId}`);
             this.disconnect();
         } catch (err) {
             if (this.client) this.disconnect();
@@ -153,7 +151,7 @@ class SSHService {
             await this.connect();
             // Netid State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process
             // tcp   LISTEN 0      4096   0.0.0.0:80         0.0.0.0:*         users:(("nginx",pid=123,fd=4))
-            const output = await this.execute('sudo ss -tulpn');
+            const output = await this.execute('sudo -n ss -tulpn');
             this.disconnect();
             return this.parseSSOutput(output);
         } catch (err) {
