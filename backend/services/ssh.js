@@ -50,7 +50,8 @@ class SSHService {
                 return reject(new Error('Not connected to SSH'));
             }
 
-            this.client.exec(command, (err, stream) => {
+            // We must request a pseudo-tty (pty) because `sudo` usually requires it, even with NOPASSWD in sudoers
+            this.client.exec(command, { pty: true }, (err, stream) => {
                 if (err) return reject(err);
 
                 let output = '';
