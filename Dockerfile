@@ -11,7 +11,7 @@ WORKDIR /app
 # Note: In a real environment, we'd build the frontend first. 
 # For this setup, we'll install concurrently and run both.
 COPY backend/package*.json ./backend/
-RUN cd backend && npm install
+RUN cd backend && npm install --omit=dev
 
 COPY frontend/package*.json ./frontend/
 RUN cd frontend && npm install

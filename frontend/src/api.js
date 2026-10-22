@@ -15,7 +15,8 @@ api.interceptors.request.use(config => {
 api.interceptors.response.use(
     response => response,
     error => {
-        if (error.response?.status === 401) {
+        // A 401 from /login is just a wrong password; let the login form show it
+        if (error.response?.status === 401 && error.config?.url !== '/login') {
             localStorage.removeItem('token');
             window.location.href = '/login';
         }

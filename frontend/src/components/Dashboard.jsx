@@ -1,15 +1,81 @@
-import React, { useState, useEffect } from 'react';
-import { Shield, ShieldAlert, Server, Box, Edit2, Check, X, LogOut, Settings as SettingsIcon } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Shield, ShieldAlert, Server, Box, Edit2, Check, X, LogOut, Settings as SettingsIcon, ArrowUp, ArrowDown, ArrowUpDown, RefreshCw, AlertTriangle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api';
 
+const PROTOCOL_OPTIONS = [
+    { value: 'both', label: 'TCP + UDP', tcp: true, udp: true },
+    { value: 'tcp', label: 'TCP', tcp: true, udp: false },
+    { value: 'udp', label: 'UDP', tcp: false, udp: true }
+];
+
+const SORT_STORAGE_KEY = 'portwarden.sort';
+
+// Default protocol selection for a row: whatever is actually listening, or both if unknown
+const defaultSelection = (p) => {
+    if (p.listening.tcp && !p.listening.udp) return 'tcp';
+    if (p.listening.udp && !p.listening.tcp) return 'udp';
+    return 'both';
+};
+
+const sourceLabel = (p) => p.docker?.name || p.process?.split(' ')[0] || '';
+
+// Sort value for each column; protocol columns rank TCP+UDP > TCP > UDP > none
+const protoRank = ({ tcp, udp }) => (tcp ? 2 : 0) + (udp ? 1 : 0);
+const SORTERS = {
+    port: (p) => p.port,
+    name: (p) => p.customName?.toLowerCase() || null,
+    source: (p) => sourceLabel(p).toLowerCase() || null,
+    listening: (p) => protoRank(p.listening),
+    ufw: (p) => protoRank(p.allowed)
+};
+
+const loadSort = () => {
+    try {
+        const saved = JSON.parse(localStorage.getItem(SORT_STORAGE_KEY));
+        if (saved && SORTERS[saved.key] && (saved.dir === 'asc' || saved.dir === 'desc')) return saved;
+    } catch (e) { /* ignore */ }
+    return { key: 'port', dir: 'asc' };
+};
+
+const ProtocolBadges = ({ flags, variant }) => (
+    <div className="proto-badges">
+        {['tcp', 'udp'].map(proto => (
+            <span
+                key={proto}
+                className={`proto-badge ${flags[proto] ? `proto-on-${variant}` : 'proto-off'}`}
+                title={`${proto.toUpperCase()} ${flags[proto] ? (variant === 'allowed' ? 'allowed' : 'listening') : (variant === 'allowed' ? 'blocked' : 'not listening')}`}
+            >
+                {flags[proto] ? <Check size={12} /> : <X size={12} />}
+                {proto.toUpperCase()}
+            </span>
+        ))}
+    </div>
+);
+
+const ProtocolSelect = ({ value, onChange, disabled }) => (
+    <select
+        className="proto-select"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        aria-label="Protocol"
+    >
+        {PROTOCOL_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+    </select>
+);
+
 const Dashboard = ({ onLogout }) => {
-    const [data, setData] = useState({ ports: [], ufwActive: false });
+    const [data, setData] = useState({ ports: [], ufwActive: false, errors: [] });
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [editingPort, setEditingPort] = useState(null);
     const [editName, setEditName] = useState('');
     const [manualPort, setManualPort] = useState('');
+    const [manualProto, setManualProto] = useState('both');
+    const [selections, setSelections] = useState({});
+    const [busyPort, setBusyPort] = useState(null);
+    const [sort, setSort] = useState(loadSort);
     const navigate = useNavigate();
 
     const fetchData = async () => {
@@ -29,31 +95,89 @@ const Dashboard = ({ onLogout }) => {
         fetchData();
     }, []);
 
-    const handleEditName = async (port, protocol) => {
+    useEffect(() => {
         try {
-            await api.post('/custom-name', { port, protocol, name: editName });
+            localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify(sort));
+        } catch (e) { /* ignore */ }
+    }, [sort]);
+
+    const sortedPorts = useMemo(() => {
+        const getValue = SORTERS[sort.key];
+        const factor = sort.dir === 'asc' ? 1 : -1;
+        return [...data.ports].sort((a, b) => {
+            const va = getValue(a);
+            const vb = getValue(b);
+            // Empty values always sink to the bottom
+            if (va === null && vb !== null) return 1;
+            if (vb === null && va !== null) return -1;
+            if (va !== vb && va !== null) {
+                const cmp = typeof va === 'string' ? va.localeCompare(vb) : va - vb;
+                if (cmp !== 0) return cmp * factor;
+            }
+            return a.port - b.port;
+        });
+    }, [data.ports, sort]);
+
+    const toggleSort = (key) => {
+        setSort(prev => prev.key === key
+            ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
+            : { key, dir: 'asc' });
+    };
+
+    const sortHeader = (column, label) => {
+        const active = sort.key === column;
+        const Icon = !active ? ArrowUpDown : sort.dir === 'asc' ? ArrowUp : ArrowDown;
+        return (
+            <th key={column} aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                <button className={`sort-btn ${active ? 'active' : ''}`} onClick={() => toggleSort(column)}>
+                    {label}
+                    <Icon size={14} />
+                </button>
+            </th>
+        );
+    };
+
+    const handleEditName = async (port) => {
+        try {
+            await api.post('/custom-name', { port, name: editName });
             setEditingPort(null);
             fetchData();
         } catch (err) {
-            alert('Failed to save name');
+            alert(err.response?.data?.error || 'Failed to save name');
         }
     };
 
-    const toggleUfw = async (portObj) => {
+    const setUfw = async (port, desired) => {
+        setBusyPort(port);
         try {
-            if (portObj.ufwRules.length > 0) {
-                // Delete rules
-                for (const rule of portObj.ufwRules) {
-                    await api.post('/ufw/delete', { ruleId: rule.id });
-                }
-            } else {
-                // Allow port - FORCE "Any" protocol per user request
-                await api.post('/ufw/allow', { port: portObj.port, protocol: 'Any' });
-            }
-            fetchData();
+            await api.post('/ufw/set', { port, tcp: desired.tcp, udp: desired.udp });
+            await fetchData();
         } catch (err) {
-            alert('Failed to update UFW rules');
+            alert(err.response?.data?.error || 'Failed to update UFW rules');
+        } finally {
+            setBusyPort(null);
         }
+    };
+
+    // Allow adds the selected protocols to what's already allowed; Block removes them
+    const applyRule = (p, action) => {
+        const sel = PROTOCOL_OPTIONS.find(o => o.value === (selections[p.port] || defaultSelection(p)));
+        const desired = action === 'allow'
+            ? { tcp: p.allowed.tcp || sel.tcp, udp: p.allowed.udp || sel.udp }
+            : { tcp: p.allowed.tcp && !sel.tcp, udp: p.allowed.udp && !sel.udp };
+        setUfw(p.port, desired);
+    };
+
+    const addManualRule = async () => {
+        const port = parseInt(manualPort, 10);
+        if (!(port >= 1 && port <= 65535)) {
+            alert('Port must be between 1 and 65535');
+            return;
+        }
+        const existing = data.ports.find(p => p.port === port)?.allowed || { tcp: false, udp: false };
+        const sel = PROTOCOL_OPTIONS.find(o => o.value === manualProto);
+        await setUfw(port, { tcp: existing.tcp || sel.tcp, udp: existing.udp || sel.udp });
+        setManualPort('');
     };
 
     if (loading && data.ports.length === 0) {
@@ -84,6 +208,14 @@ const Dashboard = ({ onLogout }) => {
 
                 <div className="header-actions">
                     <button
+                        onClick={fetchData}
+                        className="btn-icon"
+                        title="Refresh"
+                        disabled={loading}
+                    >
+                        <RefreshCw size={20} className={loading ? 'spin' : ''} />
+                    </button>
+                    <button
                         onClick={() => navigate('/settings')}
                         className="btn-icon"
                         title="Settings"
@@ -110,30 +242,42 @@ const Dashboard = ({ onLogout }) => {
                 </div>
             )}
 
+            {data.errors?.length > 0 && (
+                <div className="alert alert-warning">
+                    <AlertTriangle size={20} />
+                    <div>
+                        {data.errors.map((e, i) => <div key={i}>{e}</div>)}
+                    </div>
+                </div>
+            )}
+
             <div className="table-card">
                 <div className="table-wrapper">
                     <table>
                         <thead>
                             <tr>
-                                <th>Port / Protocol</th>
-                                <th>Name</th>
-                                <th>Source</th>
-                                <th>UFW AllowList</th>
+                                {sortHeader('port', 'Port')}
+                                {sortHeader('name', 'Name')}
+                                {sortHeader('source', 'Source')}
+                                {sortHeader('listening', 'Listening')}
+                                {sortHeader('ufw', 'UFW Allowed')}
                                 <th style={{ textAlign: 'right' }}>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {data.ports.map((p) => {
+                            {sortedPorts.map((p) => {
                                 const key = `${p.port}`;
                                 const isEditing = editingPort === key;
-                                const isAllowed = p.ufwRules.length > 0;
+                                const selection = selections[p.port] || defaultSelection(p);
+                                const sel = PROTOCOL_OPTIONS.find(o => o.value === selection);
+                                const canAllow = (sel.tcp && !p.allowed.tcp) || (sel.udp && !p.allowed.udp);
+                                const canBlock = (sel.tcp && p.allowed.tcp) || (sel.udp && p.allowed.udp);
+                                const busy = busyPort === p.port;
 
                                 return (
                                     <tr key={key}>
                                         <td>
-                                            <div className="port-cell">
-                                                {p.port} <span className="port-proto">{p.protocol}</span>
-                                            </div>
+                                            <div className="port-cell">{p.port}</div>
                                         </td>
 
                                         <td>
@@ -143,11 +287,15 @@ const Dashboard = ({ onLogout }) => {
                                                         type="text"
                                                         className="name-input"
                                                         value={editName}
+                                                        maxLength={64}
                                                         onChange={(e) => setEditName(e.target.value)}
                                                         autoFocus
-                                                        onKeyDown={(e) => e.key === 'Enter' && handleEditName(p.port, p.protocol)}
+                                                        onKeyDown={(e) => {
+                                                            if (e.key === 'Enter') handleEditName(p.port);
+                                                            if (e.key === 'Escape') setEditingPort(null);
+                                                        }}
                                                     />
-                                                    <button onClick={() => handleEditName(p.port, p.protocol)} className="icon-btn icon-success"><Check size={16} /></button>
+                                                    <button onClick={() => handleEditName(p.port)} className="icon-btn icon-success"><Check size={16} /></button>
                                                     <button onClick={() => setEditingPort(null)} className="icon-btn icon-danger"><X size={16} /></button>
                                                 </div>
                                             ) : (
@@ -161,6 +309,7 @@ const Dashboard = ({ onLogout }) => {
                                                             setEditName(p.customName || '');
                                                         }}
                                                         className="edit-btn"
+                                                        title="Rename"
                                                     >
                                                         <Edit2 size={16} />
                                                     </button>
@@ -187,26 +336,35 @@ const Dashboard = ({ onLogout }) => {
                                         </td>
 
                                         <td>
-                                            {isAllowed ? (
-                                                <div className="pill pill-allowed">
-                                                    <Check size={16} />
-                                                    <span>Allowed ({p.ufwRules.length})</span>
-                                                </div>
-                                            ) : (
-                                                <div className="pill pill-blocked">
-                                                    <X size={16} />
-                                                    <span>Blocked</span>
-                                                </div>
-                                            )}
+                                            <ProtocolBadges flags={p.listening} variant="listening" />
+                                        </td>
+
+                                        <td>
+                                            <ProtocolBadges flags={p.allowed} variant="allowed" />
                                         </td>
 
                                         <td style={{ textAlign: 'right' }}>
-                                            <button
-                                                onClick={() => toggleUfw(p)}
-                                                className={`btn-toggle ${isAllowed ? 'block' : 'allow'}`}
-                                            >
-                                                {isAllowed ? 'Block Port' : 'Allow Port'}
-                                            </button>
+                                            <div className="action-cell">
+                                                <ProtocolSelect
+                                                    value={selection}
+                                                    onChange={(v) => setSelections(s => ({ ...s, [p.port]: v }))}
+                                                    disabled={busy}
+                                                />
+                                                <button
+                                                    onClick={() => applyRule(p, 'allow')}
+                                                    className="btn-toggle allow"
+                                                    disabled={busy || !canAllow}
+                                                >
+                                                    Allow
+                                                </button>
+                                                <button
+                                                    onClick={() => applyRule(p, 'block')}
+                                                    className="btn-toggle block"
+                                                    disabled={busy || !canBlock}
+                                                >
+                                                    Block
+                                                </button>
+                                            </div>
                                         </td>
                                     </tr>
                                 );
@@ -219,11 +377,13 @@ const Dashboard = ({ onLogout }) => {
                                             type="number"
                                             className="name-input"
                                             placeholder="Port (e.g. 8080)"
+                                            min="1"
+                                            max="65535"
                                             value={manualPort}
                                             onChange={(e) => setManualPort(e.target.value)}
-                                            style={{ width: '110px' }}
+                                            onKeyDown={(e) => e.key === 'Enter' && manualPort && addManualRule()}
+                                            style={{ width: '130px' }}
                                         />
-                                        <span className="port-proto" style={{ marginLeft: '12px' }}>Any</span>
                                     </div>
                                 </td>
                                 <td>
@@ -232,34 +392,29 @@ const Dashboard = ({ onLogout }) => {
                                 <td>
                                     <span className="name-text unnamed">Inactive</span>
                                 </td>
+                                <td></td>
                                 <td>
                                     <div className="pill pill-blocked" style={{ opacity: 0.5 }}>
                                         <span>Pending Rules</span>
                                     </div>
                                 </td>
                                 <td style={{ textAlign: 'right' }}>
-                                    <button
-                                        onClick={async () => {
-                                            if (!manualPort) return;
-                                            try {
-                                                await api.post('/ufw/allow', { port: parseInt(manualPort), protocol: 'Any' });
-                                                setManualPort('');
-                                                fetchData();
-                                            } catch (err) {
-                                                alert('Failed to add rule');
-                                            }
-                                        }}
-                                        className="btn-toggle allow"
-                                        disabled={!manualPort}
-                                    >
-                                        Allow Port
-                                    </button>
+                                    <div className="action-cell">
+                                        <ProtocolSelect value={manualProto} onChange={setManualProto} />
+                                        <button
+                                            onClick={addManualRule}
+                                            className="btn-toggle allow"
+                                            disabled={!manualPort || busyPort !== null}
+                                        >
+                                            Allow
+                                        </button>
+                                    </div>
                                 </td>
                             </tr>
 
                             {data.ports.length === 0 && !loading && (
                                 <tr>
-                                    <td colSpan="5">
+                                    <td colSpan="6">
                                         <div className="empty-state">
                                             <Shield className="empty-icon" />
                                             <p style={{ fontSize: '1.125rem', color: 'var(--text-primary)' }}>No ports found</p>

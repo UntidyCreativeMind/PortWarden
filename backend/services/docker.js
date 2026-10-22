@@ -2,8 +2,11 @@ import Docker from 'dockerode';
 
 class DockerService {
     constructor() {
-        // Connect to the local Docker socket by default
-        this.docker = new Docker({ socketPath: '/var/run/docker.sock' });
+        // Use DOCKER_HOST when set (e.g. tcp://docker-proxy:2375, a read-only socket proxy),
+        // otherwise fall back to the local Docker socket
+        this.docker = process.env.DOCKER_HOST
+            ? new Docker()
+            : new Docker({ socketPath: '/var/run/docker.sock' });
     }
 
     async getContainers() {

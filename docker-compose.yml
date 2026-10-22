@@ -1,26 +1,48 @@
-version: '3.8'
-
 services:
   portwarden:
-    # Build directly from the main branch of the GitHub repository
-    build: https://github.com/UntidyCreativeMind/PortWarden.git#main
+    # Build from this checkout (run `docker compose up -d --build` in the repo directory)
+    build: .
     container_name: portwarden
-    restart: always
+    restart: unless-stopped
     ports:
       - "9876:3001"
     volumes:
       - portwarden-data:/app/backend/data
-      # Mount SSH keys if needed for host access
-      - ~/.ssh:/root/.ssh:ro
-      # Mount Docker socket for native integration
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # A dedicated SSH key for PortWarden only - do NOT mount your whole ~/.ssh.
+      # Put the private key at ./ssh/id_ed25519 (see README).
+      - ./ssh:/root/.ssh:ro
     environment:
       - NODE_ENV=production
       - PORT=3001
       - DB_PATH=/app/backend/data/database.sqlite
-      - JWT_SECRET=super_secret_temporary_key_for_dev
-      # We'll need host IP for SSH connection
+      # Address of the host to manage over SSH
       - HOST_IP=172.17.0.1
+      # Docker access goes through a read-only socket proxy instead of the raw socket
+      - DOCKER_HOST=tcp://docker-proxy:2375
+      # Optional: set your own token signing secret. If unset, a random one is
+      # generated and stored in the data volume.
+      # - JWT_SECRET=change-me-to-a-long-random-string
+      # Optional: initial admin password (first run only). If unset, a random
+      # password is printed once in the container logs: docker logs portwarden
+      # - ADMIN_PASSWORD=change-me
+    depends_on:
+      - docker-proxy
+    security_opt:
+      - no-new-privileges:true
+
+  # Exposes only the read-only "list containers" part of the Docker API.
+  # Mounting /var/run/docker.sock directly (even :ro) gives full root-equivalent control of the host.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: portwarden-docker-proxy
+    restart: unless-stopped
+    environment:
+      - CONTAINERS=1
+      - POST=0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
   portwarden-data:

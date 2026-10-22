@@ -1,5 +1,4 @@
 import express from 'express';
-import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -11,16 +10,32 @@ const port = process.env.PORT || 3001;
 
 import apiRoutes from './routes/api.js';
 
-// Middleware
-app.use(cors());
-app.use(express.json());
+app.disable('x-powered-by');
 
-// Routes
-app.use('/api', apiRoutes);
+// Middleware
+// No CORS: the frontend is served from this same origin (and proxied by Vite in dev)
+app.use(express.json({ limit: '1mb' }));
+
+// Basic security headers
+app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'");
+    next();
+});
 
 // Basic health check route
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', message: 'PortWarden API is running' });
+});
+
+// Routes
+app.use('/api', apiRoutes);
+
+// Unknown API routes return JSON, not the SPA
+app.use('/api', (req, res) => {
+    res.status(404).json({ error: 'Not found' });
 });
 
 // Serve frontend in production

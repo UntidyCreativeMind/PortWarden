@@ -1,25 +1,51 @@
 import { Client } from 'ssh2';
 import db from '../database.js';
 import fs from 'fs';
+import { parsePort, parseRuleId, PROTOCOLS } from '../security.js';
+
+// Protocols an inbound ALLOW rule opens, or [] if the rule isn't one for a single port
+export const ruleProtocols = (rule) => {
+    if (rule.action !== 'ALLOW' || rule.direction !== 'IN' || !/^\d+$/.test(rule.to)) return [];
+    return rule.protocol === 'Any' ? [...PROTOCOLS] : PROTOCOLS.filter(p => p === rule.protocol);
+};
 
 class SSHService {
-    constructor() {
-        this.client = null;
+    // Opens a connection, runs fn(exec), and always closes the connection afterwards
+    async withConnection(fn) {
+        const client = await this.connect();
+        try {
+            return await fn((command) => this.execute(client, command));
+        } finally {
+            client.end();
+        }
     }
 
-    async connect() {
+    connect() {
         return new Promise((resolve, reject) => {
             const settings = db.getSettings();
-            const { host_ip, ssh_username, ssh_password, ssh_key_path } = settings;
+            const { host_ip, ssh_username, ssh_password, ssh_key_path, ssh_host_fingerprint } = settings;
 
             if (!host_ip || !ssh_username) {
                 return reject(new Error('SSH settings incomplete: Host IP and Username are required'));
             }
 
+            let hostKeyRejected = false;
             const connectOptions = {
                 host: host_ip,
                 port: 22,
-                username: ssh_username
+                username: ssh_username,
+                readyTimeout: 10000,
+                // Trust-on-first-use host key pinning: remember the host's key fingerprint
+                // on the first connection and refuse to connect if it ever changes.
+                hostHash: 'sha256',
+                hostVerifier: (fingerprint) => {
+                    if (!ssh_host_fingerprint) {
+                        db.updateSetting('ssh_host_fingerprint', fingerprint);
+                        return true;
+                    }
+                    hostKeyRejected = fingerprint !== ssh_host_fingerprint;
+                    return !hostKeyRejected;
+                }
             };
 
             if (ssh_password) {
@@ -34,28 +60,28 @@ class SSHService {
                 return reject(new Error('SSH settings incomplete: Password or Key Path missing'));
             }
 
-            this.client = new Client();
+            const client = new Client();
 
-            this.client.on('ready', () => {
-                resolve();
+            client.on('ready', () => {
+                resolve(client);
             }).on('error', (err) => {
+                if (hostKeyRejected) {
+                    return reject(new Error('SSH host key does not match the pinned key. If the host was legitimately reinstalled, reset the pinned key in Settings.'));
+                }
                 reject(err);
             }).connect(connectOptions);
         });
     }
 
-    async execute(command) {
+    execute(client, command) {
         return new Promise((resolve, reject) => {
-            if (!this.client) {
-                return reject(new Error('Not connected to SSH'));
-            }
-            this.client.exec(command, (err, stream) => {
+            client.exec(command, (err, stream) => {
                 if (err) return reject(err);
 
                 let output = '';
                 let errorOutput = '';
 
-                stream.on('close', (code, signal) => {
+                stream.on('close', (code) => {
                     if (code !== 0) {
                         // Sometime UFW commands output to stderr, sometimes to stdout even if failed.
                         return reject(new Error(`Command failed with code ${code}: ${errorOutput || output}`));
@@ -70,23 +96,9 @@ class SSHService {
         });
     }
 
-    disconnect() {
-        if (this.client) {
-            this.client.end();
-            this.client = null;
-        }
-    }
-
     async getUFWStatus() {
-        try {
-            await this.connect();
-            const output = await this.execute('sudo -n ufw status numbered');
-            this.disconnect();
-            return this.parseUFWStatus(output);
-        } catch (err) {
-            if (this.client) this.disconnect();
-            throw err;
-        }
+        const output = await this.withConnection((exec) => exec('sudo -n ufw status numbered'));
+        return this.parseUFWStatus(output);
     }
 
     parseUFWStatus(output) {
@@ -98,66 +110,76 @@ class SSHService {
             if (line.includes('Status: active')) {
                 isActive = true;
             }
-            // Match rules like: [ 1] 80/tcp  ALLOW IN  Anywhere
-            const match = line.match(/^\[\s*(\d+)\]\s+(\S+)\s+([A-Z\s]+)\s+(.*)$/);
-            if (match) {
-                const portProto = match[2];
-                let port, protocol = 'Any';
-                if (portProto.includes('/')) {
-                    [port, protocol] = portProto.split('/');
-                } else {
-                    port = portProto;
-                }
+            // Match rules like:
+            //   [ 1] 80/tcp                     ALLOW IN    Anywhere
+            //   [ 2] 80/tcp (v6)                ALLOW IN    Anywhere (v6)
+            //   [ 3] 8080 on eth0               DENY IN     192.168.1.0/24
+            const match = line.match(/^\[\s*(\d+)\]\s+(.+?)\s+(ALLOW|DENY|REJECT|LIMIT)(?:\s+(IN|OUT|FWD))?\s+(.*)$/);
+            if (!match) continue;
 
-                rules.push({
-                    id: parseInt(match[1]),
-                    to: port,
-                    protocol: protocol,
-                    action: match[3].trim(),
-                    from: match[4].trim()
-                });
+            let to = match[2].trim();
+            const v6 = to.includes('(v6)');
+            to = to.replace(/\(v6\)/g, '').replace(/\s+on\s+\S+/, '').trim();
+
+            let port = to, protocol = 'Any';
+            if (to.includes('/')) {
+                [port, protocol] = to.split('/');
             }
+
+            rules.push({
+                id: parseInt(match[1]),
+                to: port,
+                protocol: protocol.toLowerCase() === 'any' ? 'Any' : protocol.toLowerCase(),
+                action: match[3],
+                direction: match[4] || 'IN',
+                from: match[5].trim(),
+                v6
+            });
         }
 
         return { active: isActive, rules };
     }
 
-    async addUFWRule(port, protocol) {
-        try {
-            await this.connect();
-            const protoSuffix = protocol && protocol !== 'Any' ? `/${protocol}` : '';
-            await this.execute(`sudo -n ufw allow ${port}${protoSuffix}`);
-            this.disconnect();
-        } catch (err) {
-            if (this.client) this.disconnect();
-            throw err;
-        }
-    }
+    // Make UFW allow exactly the requested protocols ({ tcp: bool, udp: bool }) for a port.
+    // Removes any ALLOW rules that open protocols that should now be blocked, then adds
+    // per-protocol rules for anything still missing.
+    async setPortRules(portValue, desired) {
+        const port = parsePort(portValue);
+        if (port === null) throw new Error('Invalid port');
+        const want = {
+            tcp: desired?.tcp === true,
+            udp: desired?.udp === true
+        };
 
-    async deleteUFWRule(ruleId) {
-        try {
-            await this.connect();
-            // We can use `--force` to bypass it: `sudo ufw --force delete X`
-            await this.execute(`sudo -n ufw --force delete ${ruleId}`);
-            this.disconnect();
-        } catch (err) {
-            if (this.client) this.disconnect();
-            throw err;
-        }
+        return this.withConnection(async (exec) => {
+            const { rules } = this.parseUFWStatus(await exec('sudo -n ufw status numbered'));
+            const portRules = rules.filter(r => parseInt(r.to) === port && ruleProtocols(r).length > 0);
+
+            // Delete rules that open an unwanted protocol, highest number first so numbering stays valid
+            const toDelete = portRules
+                .filter(r => ruleProtocols(r).some(p => !want[p]))
+                .sort((a, b) => b.id - a.id);
+            for (const rule of toDelete) {
+                const id = parseRuleId(rule.id);
+                if (id === null) continue;
+                await exec(`sudo -n ufw --force delete ${id}`);
+            }
+
+            const remaining = portRules.filter(r => !toDelete.includes(r));
+            const covered = new Set(remaining.flatMap(r => ruleProtocols(r)));
+            for (const proto of PROTOCOLS) {
+                if (want[proto] && !covered.has(proto)) {
+                    await exec(`sudo -n ufw allow ${port}/${proto}`);
+                }
+            }
+        });
     }
 
     async getOpenPorts() {
-        try {
-            await this.connect();
-            // Netid State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process
-            // tcp   LISTEN 0      4096   0.0.0.0:80         0.0.0.0:*         users:(("nginx",pid=123,fd=4))
-            const output = await this.execute('sudo -n ss -tulpn');
-            this.disconnect();
-            return this.parseSSOutput(output);
-        } catch (err) {
-            if (this.client) this.disconnect();
-            throw err;
-        }
+        // Netid State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+        // tcp   LISTEN 0      4096   0.0.0.0:80         0.0.0.0:*         users:(("nginx",pid=123,fd=4))
+        const output = await this.withConnection((exec) => exec('sudo -n ss -tulpn'));
+        return this.parseSSOutput(output);
     }
 
     parseSSOutput(output) {
@@ -176,13 +198,14 @@ class SSHService {
                 const lastColonIdx = localAddressPort.lastIndexOf(':');
                 if (lastColonIdx === -1) continue;
 
-                const port = localAddressPort.substring(lastColonIdx + 1);
+                const port = parseInt(localAddressPort.substring(lastColonIdx + 1));
+                if (isNaN(port)) continue;
 
                 let processInfo = parts.slice(6).join(' '); // Process info might have spaces
 
                 ports.push({
-                    protocol: netid,
-                    port: parseInt(port),
+                    protocol: netid.startsWith('udp') ? 'udp' : 'tcp',
+                    port,
                     process: processInfo
                 });
             }

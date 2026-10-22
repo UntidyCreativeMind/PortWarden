@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import crypto from 'crypto';
+import { hashPassword, verifyPassword } from './security.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -37,23 +38,34 @@ db.exec(`
   );
 `);
 
-// Insert default user if none exists
+// Create the admin user on first run. The password comes from ADMIN_PASSWORD,
+// or is randomly generated and printed once to the container logs.
 const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get().count;
 if (userCount === 0) {
-  // Default user: admin / admin (Should be changed by user immediately)
-  const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.pbkdf2Sync('admin', salt, 1000, 64, 'sha512').toString('hex');
-  const password_hash = `${salt}:${hash}`;
+  const generated = !process.env.ADMIN_PASSWORD;
+  const password = process.env.ADMIN_PASSWORD || crypto.randomBytes(12).toString('base64url');
+  db.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)').run('admin', hashPassword(password));
 
-  db.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)').run('admin', password_hash);
+  if (generated) {
+    console.log('==================================================');
+    console.log(' PortWarden first run: created user "admin"');
+    console.log(` Generated password: ${password}`);
+    console.log(' Change it under Settings after logging in.');
+    console.log('==================================================');
+  }
+} else {
+  const admin = db.prepare('SELECT * FROM users WHERE username = ?').get('admin');
+  if (admin && verifyPassword('admin', admin.password_hash)) {
+    console.warn('WARNING: user "admin" still has the default password "admin". Change it under Settings.');
+  }
 }
 
 // Ensure default settings exist
 const defaultSettings = {
-  host_ip: '172.17.0.1',
-  ssh_username: 'root',
+  host_ip: process.env.HOST_IP || '172.17.0.1',
+  ssh_username: '',
   ssh_password: '',
-  ssh_key_path: '/root/.ssh/id_rsa'
+  ssh_key_path: '/root/.ssh/id_ed25519'
 };
 
 const insertSetting = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
@@ -61,26 +73,55 @@ for (const [key, value] of Object.entries(defaultSettings)) {
   insertSetting.run(key, value);
 }
 
+// Settings the UI may read/write. Anything else (JWT secret, pinned host key) is internal.
+export const EDITABLE_SETTINGS = ['host_ip', 'ssh_username', 'ssh_password', 'ssh_key_path'];
+
+// JWT signing secret: JWT_SECRET env var if provided, otherwise a random secret persisted in the DB
+const getJwtSecret = () => {
+  if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('jwt_secret');
+  if (row?.value) return row.value;
+  const secret = crypto.randomBytes(48).toString('hex');
+  db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('jwt_secret', secret);
+  return secret;
+};
+
+const getSettings = () => {
+  const rows = db.prepare('SELECT * FROM settings').all();
+  return rows.reduce((acc, row) => ({ ...acc, [row.key]: row.value }), {});
+};
+
+const updateSetting = (key, value) => {
+  db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, value);
+};
+
+// Names are per port; the protocol column is kept for schema compatibility and always 'any'
+const setCustomName = db.transaction((port, name) => {
+  db.prepare('DELETE FROM custom_names WHERE port = ?').run(port);
+  db.prepare('INSERT INTO custom_names (port, protocol, name) VALUES (?, ?, ?)').run(port, 'any', name);
+});
+
 export default {
+  jwtSecret: getJwtSecret(),
+
   // User methods
   getUser: (username) => db.prepare('SELECT * FROM users WHERE username = ?').get(username),
   updatePassword: (username, newPasswordHash) => db.prepare('UPDATE users SET password_hash = ? WHERE username = ?').run(newPasswordHash, username),
 
   // Settings methods
-  getSettings: () => {
-    const rows = db.prepare('SELECT * FROM settings').all();
-    return rows.reduce((acc, row) => ({ ...acc, [row.key]: row.value }), {});
-  },
-  updateSetting: (key, value) => {
-    db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, value);
-  },
+  getSettings,
+  updateSetting,
 
   // Custom names methods
-  getCustomNames: () => db.prepare('SELECT * FROM custom_names').all(),
-  setCustomName: (port, protocol, name) => {
-    db.prepare('INSERT INTO custom_names (port, protocol, name) VALUES (?, ?, ?) ON CONFLICT(port, protocol) DO UPDATE SET name=excluded.name').run(port, protocol, name);
-  },
-  deleteCustomName: (port, protocol) => db.prepare('DELETE FROM custom_names WHERE port = ? AND protocol = ?').run(port, protocol),
+  getCustomNames: () => db.prepare('SELECT port, name FROM custom_names ORDER BY port').all(),
+  setCustomName,
+  deleteCustomName: (port) => db.prepare('DELETE FROM custom_names WHERE port = ?').run(port),
+
+  // Replace or merge custom names in a single transaction (used by restore)
+  importCustomNames: db.transaction((names, replace) => {
+    if (replace) db.prepare('DELETE FROM custom_names').run();
+    for (const { port, name } of names) setCustomName(port, name);
+  }),
 
   // Raw db instance if needed
   raw: db
