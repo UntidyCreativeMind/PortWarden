@@ -142,7 +142,8 @@ class SSHService {
 
     // Make UFW allow exactly the requested protocols ({ tcp: bool, udp: bool }) for a port.
     // Removes any ALLOW rules that open protocols that should now be blocked, then adds
-    // per-protocol rules for anything still missing.
+    // a rule for anything still missing. When both protocols are wanted, a single
+    // protocol-less rule (`ufw allow <port>`) is used instead of separate tcp/udp rules.
     async setPortRules(portValue, desired) {
         const port = parsePort(portValue);
         if (port === null) throw new Error('Invalid port');
@@ -150,14 +151,18 @@ class SSHService {
             tcp: desired?.tcp === true,
             udp: desired?.udp === true
         };
+        const wantBoth = want.tcp && want.udp;
 
         return this.withConnection(async (exec) => {
             const { rules } = this.parseUFWStatus(await exec('sudo -n ufw status numbered'));
             const portRules = rules.filter(r => parseInt(r.to) === port && ruleProtocols(r).length > 0);
 
-            // Delete rules that open an unwanted protocol, highest number first so numbering stays valid
+            // Delete rules that open an unwanted protocol, highest number first so numbering stays valid.
+            // When allowing both, also fold unrestricted per-protocol rules into one combined rule
+            // (rules limited to a specific source are left alone).
             const toDelete = portRules
-                .filter(r => ruleProtocols(r).some(p => !want[p]))
+                .filter(r => ruleProtocols(r).some(p => !want[p])
+                    || (wantBoth && r.protocol !== 'Any' && r.from.startsWith('Anywhere')))
                 .sort((a, b) => b.id - a.id);
             for (const rule of toDelete) {
                 const id = parseRuleId(rule.id);
@@ -166,6 +171,13 @@ class SSHService {
             }
 
             const remaining = portRules.filter(r => !toDelete.includes(r));
+            if (wantBoth) {
+                if (!remaining.some(r => r.protocol === 'Any')) {
+                    await exec(`sudo -n ufw allow ${port}`);
+                }
+                return;
+            }
+
             const covered = new Set(remaining.flatMap(r => ruleProtocols(r)));
             for (const proto of PROTOCOLS) {
                 if (want[proto] && !covered.has(proto)) {
