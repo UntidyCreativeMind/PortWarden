@@ -1,8 +1,11 @@
-import { Client, utils as sshUtils } from 'ssh2';
+import ssh2 from 'ssh2';
 import db, { dataDir } from '../database.js';
 import fs from 'fs';
 import path from 'path';
 import { parsePort, parseRuleId, PROTOCOLS } from '../security.js';
+
+// ssh2 is CommonJS, so its exports can't all be imported by name
+const { Client, utils: sshUtils } = ssh2;
 
 // PortWarden's own SSH key pair, kept in the data volume so nothing has to be mounted.
 // Its public key is shown in Settings to be added to the host's authorized_keys.
