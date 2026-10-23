@@ -697,3 +697,10 @@ tr:hover .edit-btn {
     padding: 0.25rem 0.625rem;
     font-size: 0.8rem;
 }
+
+.public-key {
+    font-family: monospace;
+    font-size: 0.75rem;
+    resize: none;
+    word-break: break-all;
+}

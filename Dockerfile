@@ -7,6 +7,8 @@ RUN apk add --no-cache openssh-client
 # Set working directory
 WORKDIR /app
 
+ENV NODE_ENV=production
+
 # Copy package files and install dependencies
 # Note: In a real environment, we'd build the frontend first. 
 # For this setup, we'll install concurrently and run both.

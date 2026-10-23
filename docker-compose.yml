@@ -1,30 +1,15 @@
+# Ready to paste into a Portainer stack (web editor) - no .env or environment variables needed.
 services:
   portwarden:
-    # Build from this checkout (run `docker compose up -d --build` in the repo directory)
-    build: .
+    # Built straight from GitHub. Change "#v0.2" to "#main" once v0.2 is merged.
+    build: https://github.com/UntidyCreativeMind/PortWarden.git#v0.2
     container_name: portwarden
     restart: unless-stopped
     ports:
       - "9876:3001"
     volumes:
+      # Database, generated SSH key and login secret all live here
       - portwarden-data:/app/backend/data
-      # A dedicated SSH key for PortWarden only - do NOT mount your whole ~/.ssh.
-      # Put the private key at ./ssh/id_ed25519 (see README).
-      - ./ssh:/root/.ssh:ro
-    environment:
-      - NODE_ENV=production
-      - PORT=3001
-      - DB_PATH=/app/backend/data/database.sqlite
-      # Address of the host to manage over SSH
-      - HOST_IP=172.17.0.1
-      # Docker access goes through a read-only socket proxy instead of the raw socket
-      - DOCKER_HOST=tcp://docker-proxy:2375
-      # Optional: set your own token signing secret. If unset, a random one is
-      # generated and stored in the data volume.
-      # - JWT_SECRET=change-me-to-a-long-random-string
-      # Optional: initial admin password (first run only). If unset, a random
-      # password is printed once in the container logs: docker logs portwarden
-      # - ADMIN_PASSWORD=change-me
     depends_on:
       - docker-proxy
     security_opt:

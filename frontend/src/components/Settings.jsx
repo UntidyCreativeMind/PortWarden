@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Save, AlertCircle, CheckCircle, Download, Upload, KeyRound } from 'lucide-react';
+import { ArrowLeft, Save, AlertCircle, CheckCircle, Download, Upload, KeyRound, Copy } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api';
 
@@ -13,6 +13,8 @@ const Settings = () => {
     const [passwordSet, setPasswordSet] = useState(false);
     const [clearPassword, setClearPassword] = useState(false);
     const [hostFingerprint, setHostFingerprint] = useState(null);
+    const [managedKey, setManagedKey] = useState({ publicKey: null, path: '' });
+    const [copied, setCopied] = useState(false);
 
     const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirm: '' });
 
@@ -20,6 +22,7 @@ const Settings = () => {
     const [restoreMode, setRestoreMode] = useState('merge');
     const [restoreSettings, setRestoreSettings] = useState(false);
     const fileInputRef = useRef(null);
+    const publicKeyRef = useRef(null);
 
     const [loading, setLoading] = useState(false);
     const [success, setSuccess] = useState('');
@@ -30,10 +33,11 @@ const Settings = () => {
     const fetchSettings = async () => {
         try {
             const res = await api.get('/settings');
-            const { ssh_password_set, ssh_host_fingerprint, ...rest } = res.data;
+            const { ssh_password_set, ssh_host_fingerprint, ssh_public_key, managed_key_path, ...rest } = res.data;
             setSettings(prev => ({ ...prev, ...rest, ssh_password: '' }));
             setPasswordSet(ssh_password_set);
             setHostFingerprint(ssh_host_fingerprint);
+            setManagedKey({ publicKey: ssh_public_key, path: managed_key_path });
             setClearPassword(false);
         } catch (err) {
             console.error(err);
@@ -66,6 +70,18 @@ const Settings = () => {
         } finally {
             setLoading(false);
         }
+    };
+
+    // navigator.clipboard only exists over HTTPS/localhost, so fall back to selecting the text
+    const handleCopyKey = async () => {
+        try {
+            await navigator.clipboard.writeText(managedKey.publicKey);
+        } catch {
+            publicKeyRef.current?.select();
+            document.execCommand('copy');
+        }
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
     };
 
     const handleResetHostKey = async () => {
@@ -241,9 +257,39 @@ const Settings = () => {
                                 value={settings.ssh_key_path}
                                 onChange={handleChange}
                                 className="text-input"
-                                placeholder="/root/.ssh/id_ed25519"
+                                placeholder={managedKey.path}
                             />
+                            {managedKey.path && settings.ssh_key_path !== managedKey.path && (
+                                <button
+                                    type="button"
+                                    className="btn-outline btn-small"
+                                    style={{ marginTop: '0.5rem' }}
+                                    onClick={() => setSettings(prev => ({ ...prev, ssh_key_path: managedKey.path }))}
+                                >
+                                    Use PortWarden's generated key
+                                </button>
+                            )}
                         </div>
+
+                        {managedKey.publicKey && (
+                            <div className="input-group">
+                                <label>PortWarden Public Key</label>
+                                <textarea
+                                    ref={publicKeyRef}
+                                    className="text-input public-key"
+                                    value={managedKey.publicKey}
+                                    readOnly
+                                    rows={3}
+                                    onFocus={(e) => e.target.select()}
+                                />
+                                <button type="button" className="btn-outline btn-small" style={{ marginTop: '0.5rem' }} onClick={handleCopyKey}>
+                                    <Copy size={14} /> {copied ? 'Copied!' : 'Copy'}
+                                </button>
+                                <p className="input-hint">
+                                    Add this line to <code>~/.ssh/authorized_keys</code> of the SSH user on the host.
+                                </p>
+                            </div>
+                        )}
 
                         <div className="input-group">
                             <label>Pinned Host Key (SHA256)</label>

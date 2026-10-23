@@ -2,33 +2,28 @@
 
 A web dashboard for a Linux host that shows every listening port (host processes and Docker containers), whether UFW allows it over TCP, UDP or both, and lets you allow or block ports from the browser.
 
-## Install
+## Install (Portainer)
 
-```bash
-git clone https://github.com/UntidyCreativeMind/PortWarden.git
-cd PortWarden
+1. In Portainer, go to **Stacks**, click **Add stack**, choose **Web editor**, and paste in [`docker-compose.yml`](docker-compose.yml). You don't need to set any environment variables.
+2. Deploy the stack.
+3. Open the `portwarden` container's **Logs** in Portainer. On first run it prints a generated password for the `admin` user.
+4. Open `http://<host>:9876`, log in as `admin`, and change the password under Settings.
 
-# 1. Create a dedicated SSH key just for PortWarden
-mkdir -p ssh
-ssh-keygen -t ed25519 -N "" -f ssh/id_ed25519 -C portwarden
+The compose file builds the image straight from GitHub. It currently points at the `v0.2` branch; change `#v0.2` to `#main` once it's merged. To pick up new commits, delete the old `portwarden` image under **Images**, then redeploy the stack so it rebuilds.
 
-# 2. Start it
-docker compose up -d --build
-
-# 3. Get the generated admin password (printed once on first run)
-docker logs portwarden
-```
-
-Open `http://<host>:9876`, log in as `admin`, and change the password under Settings. You can also set `ADMIN_PASSWORD` in `docker-compose.yml` before the first start.
+Without Portainer, the same file works with `docker compose up -d --build`.
 
 ## Host configuration
 
-On the host being monitored, create a dedicated non-root user, authorize the key, and allow it to run only `ufw` and `ss` through sudo:
+PortWarden generates its own SSH key on first start and keeps it in its data volume. To let it connect to the host:
+
+1. In PortWarden, go to **Settings** and copy the **PortWarden Public Key**.
+2. On the host, create a dedicated non-root user, authorize that key, and allow the user to run only `ufw` and `ss` through sudo:
 
 ```bash
 sudo adduser --disabled-password --gecos "" portwarden
 sudo mkdir -p /home/portwarden/.ssh
-sudo cp ssh/id_ed25519.pub /home/portwarden/.ssh/authorized_keys
+echo 'PASTE-THE-PUBLIC-KEY-HERE' | sudo tee /home/portwarden/.ssh/authorized_keys
 sudo chown -R portwarden:portwarden /home/portwarden/.ssh
 sudo chmod 700 /home/portwarden/.ssh && sudo chmod 600 /home/portwarden/.ssh/authorized_keys
 
@@ -36,7 +31,7 @@ sudo chmod 700 /home/portwarden/.ssh && sudo chmod 600 /home/portwarden/.ssh/aut
 portwarden ALL=(ALL) NOPASSWD: /usr/sbin/ufw, /usr/sbin/ss
 ```
 
-Then in PortWarden's Settings, set the SSH username to `portwarden` and the key path to `/root/.ssh/id_ed25519`.
+3. Back in Settings, set the SSH username to `portwarden`, leave the key path as the generated key, and save.
 
 ## Using it
 
@@ -53,7 +48,7 @@ Go to Settings, then Backup & Restore, and click **Download Backup** to save you
 - **Merge** keeps your existing names and overwrites names for ports that are in the backup.
 - **Replace** deletes all existing names first.
 
-Host connection settings are restored only if you tick the checkbox. Backups never contain the SSH password, login accounts or the token signing secret.
+Host connection settings are restored only if you tick the checkbox. Backups never contain the SSH password, the SSH private key, login accounts or the token signing secret. If you delete the data volume, PortWarden generates a new SSH key, and you will need to add its public key to the host again.
 
 Custom names are also stored in the `portwarden-data` Docker volume, so they survive container rebuilds as long as you don't delete that volume.
 
@@ -61,8 +56,19 @@ Custom names are also stored in the `portwarden-data` Docker volume, so they sur
 
 - Login is rate-limited to 10 failed attempts per IP every 15 minutes.
 - Passwords are hashed with PBKDF2-SHA512 at 310,000 iterations. Hashes from older versions are upgraded the next time you log in.
-- The token signing secret is randomly generated and stored in the data volume, unless you set `JWT_SECRET`.
+- The token signing secret is randomly generated and stored in the data volume.
 - The SSH host key is pinned the first time PortWarden connects. If the key changes later, PortWarden refuses to connect until you click Reset in Settings.
 - The SSH password is never sent back to the browser.
 - PortWarden reaches Docker through a read-only socket proxy, never the raw Docker socket.
 - PortWarden serves plain HTTP. If you need to reach it from outside your LAN, put it behind a reverse proxy with TLS.
+
+## Optional environment variables
+
+You don't need any of these. They're only for overriding defaults:
+
+| Variable | Default |
+| --- | --- |
+| `ADMIN_PASSWORD` | Random password, printed in the logs on first run only |
+| `JWT_SECRET` | Random secret, stored in the data volume |
+| `HOST_IP` | `172.17.0.1`. Only used for the first-run default; you can also change it in Settings |
+| `DOCKER_HOST` | The local socket if it's mounted, otherwise `docker-proxy:2375` |

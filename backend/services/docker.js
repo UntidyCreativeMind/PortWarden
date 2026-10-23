@@ -1,12 +1,17 @@
 import Docker from 'dockerode';
+import fs from 'fs';
 
 class DockerService {
     constructor() {
-        // Use DOCKER_HOST when set (e.g. tcp://docker-proxy:2375, a read-only socket proxy),
-        // otherwise fall back to the local Docker socket
-        this.docker = process.env.DOCKER_HOST
-            ? new Docker()
-            : new Docker({ socketPath: '/var/run/docker.sock' });
+        // Use DOCKER_HOST when set; otherwise the local socket if it's mounted, otherwise the
+        // read-only socket proxy service from docker-compose.yml (reachable as "docker-proxy")
+        if (process.env.DOCKER_HOST) {
+            this.docker = new Docker();
+        } else if (fs.existsSync('/var/run/docker.sock')) {
+            this.docker = new Docker({ socketPath: '/var/run/docker.sock' });
+        } else {
+            this.docker = new Docker({ host: 'docker-proxy', port: 2375, protocol: 'http' });
+        }
     }
 
     async getContainers() {

@@ -1,7 +1,7 @@
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import db, { EDITABLE_SETTINGS } from '../database.js';
-import sshService, { ruleProtocols } from '../services/ssh.js';
+import sshService, { ruleProtocols, getManagedPublicKey, MANAGED_KEY_PATH } from '../services/ssh.js';
 import dockerService from '../services/docker.js';
 import {
     hashPassword, verifyPassword, needsRehash, MIN_PASSWORD_LENGTH,
@@ -85,7 +85,9 @@ router.get('/settings', authenticate, (req, res) => {
         ssh_username: settings.ssh_username || '',
         ssh_key_path: settings.ssh_key_path || '',
         ssh_password_set: !!settings.ssh_password,
-        ssh_host_fingerprint: settings.ssh_host_fingerprint || null
+        ssh_host_fingerprint: settings.ssh_host_fingerprint || null,
+        ssh_public_key: getManagedPublicKey(),
+        managed_key_path: MANAGED_KEY_PATH
     });
 });
 

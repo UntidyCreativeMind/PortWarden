@@ -1,7 +1,38 @@
-import { Client } from 'ssh2';
-import db from '../database.js';
+import { Client, utils as sshUtils } from 'ssh2';
+import db, { dataDir } from '../database.js';
 import fs from 'fs';
+import path from 'path';
 import { parsePort, parseRuleId, PROTOCOLS } from '../security.js';
+
+// PortWarden's own SSH key pair, kept in the data volume so nothing has to be mounted.
+// Its public key is shown in Settings to be added to the host's authorized_keys.
+export const MANAGED_KEY_PATH = path.join(dataDir, 'ssh', 'id_ed25519');
+const LEGACY_KEY_PATHS = ['/root/.ssh/id_rsa', '/root/.ssh/id_ed25519'];
+
+const ensureManagedKey = () => {
+    if (!fs.existsSync(MANAGED_KEY_PATH)) {
+        fs.mkdirSync(path.dirname(MANAGED_KEY_PATH), { recursive: true, mode: 0o700 });
+        const keys = sshUtils.generateKeyPairSync('ed25519', { comment: 'portwarden' });
+        fs.writeFileSync(MANAGED_KEY_PATH, keys.private, { mode: 0o600 });
+        fs.writeFileSync(`${MANAGED_KEY_PATH}.pub`, `${keys.public}\n`, { mode: 0o644 });
+        console.log('Generated PortWarden SSH key. Copy the public key from Settings to the host.');
+    }
+
+    // Older installs pointed at a mounted ~/.ssh key; switch them over once that mount is gone
+    const { ssh_key_path } = db.getSettings();
+    if (LEGACY_KEY_PATHS.includes(ssh_key_path) && !fs.existsSync(ssh_key_path)) {
+        db.updateSetting('ssh_key_path', MANAGED_KEY_PATH);
+    }
+};
+ensureManagedKey();
+
+export const getManagedPublicKey = () => {
+    try {
+        return fs.readFileSync(`${MANAGED_KEY_PATH}.pub`, 'utf8').trim();
+    } catch {
+        return null;
+    }
+};
 
 // Protocols an inbound ALLOW rule opens, or [] if the rule isn't one for a single port
 export const ruleProtocols = (rule) => {
