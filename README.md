@@ -9,9 +9,9 @@ A web dashboard for a Linux host that shows every listening port (host processes
 3. Open the `portwarden` container's **Logs** in Portainer. On first run it prints a generated password for the `admin` user.
 4. Open `http://<host>:9876`, log in as `admin`, and change the password under Settings.
 
-The compose file builds the image straight from GitHub. It currently points at the `v0.2` branch; change `#v0.2` to `#main` once it's merged. To pick up new commits, delete the old `portwarden` image under **Images**, then redeploy the stack so it rebuilds.
+The image is `ghcr.io/untidycreativemind/portwarden:latest`. GitHub Actions builds and publishes it on every push to `main`. To update, open the stack in Portainer and click **Update the stack** with **Re-pull image and redeploy** turned on.
 
-Without Portainer, the same file works with `docker compose up -d --build`.
+Without Portainer, the same file works with `docker compose up -d`.
 
 ## Host configuration
 
@@ -37,7 +37,11 @@ portwarden ALL=(ALL) NOPASSWD: /usr/sbin/ufw, /usr/bin/ss, /usr/sbin/ss
 
 ## Using it
 
-- **Sort**: click any column header. Click again to reverse the order.
+- **Sections**: ports are grouped into three sections. Click a section header to collapse or expand it.
+  - **UFW Rules**: ports with explicit UFW rules.
+  - **Docker Published**: ports published by containers. Docker's own firewall rules bypass UFW, so Allow/Block doesn't affect these.
+  - **Host Only**: ports listening on the host with no UFW rule.
+- **Sort**: click any column header. Click again to reverse the order. The sort applies to all sections.
 - **Listening**: shows whether each port is listening on TCP, UDP or both.
 - **UFW Allowed**: shows which protocols UFW currently allows for the port.
 - **Allow / Block**: pick TCP, UDP or TCP + UDP, then click Allow or Block. Other protocols on that port are left alone.

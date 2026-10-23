@@ -1,8 +1,8 @@
 # Ready to paste into a Portainer stack (web editor) - no .env or environment variables needed.
 services:
   portwarden:
-    # Built straight from GitHub. Change "#v0.2" to "#main" once v0.2 is merged.
-    build: https://github.com/UntidyCreativeMind/PortWarden.git#v0.2
+    # Published by GitHub Actions on every push to main
+    image: ghcr.io/untidycreativemind/portwarden:latest
     container_name: portwarden
     restart: unless-stopped
     ports:

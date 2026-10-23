@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Shield, ShieldAlert, Server, Box, Edit2, Check, X, LogOut, Settings as SettingsIcon, ArrowUp, ArrowDown, ArrowUpDown, RefreshCw, AlertTriangle } from 'lucide-react';
+import { Shield, ShieldAlert, Server, Box, Edit2, Check, X, LogOut, Settings as SettingsIcon, ArrowUp, ArrowDown, ArrowUpDown, RefreshCw, AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api';
 
@@ -10,6 +10,30 @@ const PROTOCOL_OPTIONS = [
 ];
 
 const SORT_STORAGE_KEY = 'portwarden.sort';
+const COLLAPSED_STORAGE_KEY = 'portwarden.collapsed';
+
+// Each port appears in exactly one section. Docker-published ports go to the Docker
+// section even if they also have UFW rules, because Docker's iptables rules bypass UFW.
+const SECTIONS = [
+    {
+        id: 'ufw',
+        title: 'UFW Rules',
+        description: 'Ports with explicit UFW rules.',
+        match: (p) => !p.docker && p.ufwRules.length > 0
+    },
+    {
+        id: 'docker',
+        title: 'Docker Published',
+        description: 'Published by Docker containers. Docker\'s own firewall rules bypass UFW, so these stay reachable regardless of Allow/Block.',
+        match: (p) => !!p.docker
+    },
+    {
+        id: 'host',
+        title: 'Host Only',
+        description: 'Listening on the host with no UFW rule. Blocked from outside if UFW\'s default incoming policy is deny.',
+        match: (p) => !p.docker && p.ufwRules.length === 0
+    }
+];
 
 // Default protocol selection for a row: whatever is actually listening, or both if unknown
 const defaultSelection = (p) => {
@@ -18,7 +42,14 @@ const defaultSelection = (p) => {
     return 'both';
 };
 
-const sourceLabel = (p) => p.docker?.name || p.process?.split(' ')[0] || '';
+// ss reports processes as users:(("nginx",pid=1,fd=4),("nginx",pid=2,fd=4)); pull out the unique names
+const processNames = (process) => {
+    if (!process) return '';
+    const names = [...new Set([...process.matchAll(/\("([^"]+)"/g)].map(m => m[1]))];
+    return names.length > 0 ? names.join(', ') : process;
+};
+
+const sourceLabel = (p) => p.docker?.name || processNames(p.process);
 
 // Sort value for each column; protocol columns rank TCP+UDP > TCP > UDP > none
 const protoRank = ({ tcp, udp }) => (tcp ? 2 : 0) + (udp ? 1 : 0);
@@ -30,13 +61,21 @@ const SORTERS = {
     ufw: (p) => protoRank(p.allowed)
 };
 
-const loadSort = () => {
+const loadStored = (key, isValid, fallback) => {
     try {
-        const saved = JSON.parse(localStorage.getItem(SORT_STORAGE_KEY));
-        if (saved && SORTERS[saved.key] && (saved.dir === 'asc' || saved.dir === 'desc')) return saved;
+        const saved = JSON.parse(localStorage.getItem(key));
+        if (isValid(saved)) return saved;
     } catch (e) { /* ignore */ }
-    return { key: 'port', dir: 'asc' };
+    return fallback;
 };
+
+const loadSort = () => loadStored(
+    SORT_STORAGE_KEY,
+    (s) => s && SORTERS[s.key] && (s.dir === 'asc' || s.dir === 'desc'),
+    { key: 'port', dir: 'asc' }
+);
+
+const loadCollapsed = () => loadStored(COLLAPSED_STORAGE_KEY, (c) => c && typeof c === 'object', {});
 
 const ProtocolBadges = ({ flags, variant }) => (
     <div className="proto-badges">
@@ -76,6 +115,7 @@ const Dashboard = ({ onLogout }) => {
     const [selections, setSelections] = useState({});
     const [busyPort, setBusyPort] = useState(null);
     const [sort, setSort] = useState(loadSort);
+    const [collapsed, setCollapsed] = useState(loadCollapsed);
     const navigate = useNavigate();
 
     const fetchData = async () => {
@@ -100,6 +140,12 @@ const Dashboard = ({ onLogout }) => {
             localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify(sort));
         } catch (e) { /* ignore */ }
     }, [sort]);
+
+    useEffect(() => {
+        try {
+            localStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify(collapsed));
+        } catch (e) { /* ignore */ }
+    }, [collapsed]);
 
     const sortedPorts = useMemo(() => {
         const getValue = SORTERS[sort.key];
@@ -180,6 +226,207 @@ const Dashboard = ({ onLogout }) => {
         setManualPort('');
     };
 
+    const renderRow = (p) => {
+        const key = `${p.port}`;
+        const isEditing = editingPort === key;
+        const selection = selections[p.port] || defaultSelection(p);
+        const sel = PROTOCOL_OPTIONS.find(o => o.value === selection);
+        const canAllow = (sel.tcp && !p.allowed.tcp) || (sel.udp && !p.allowed.udp);
+        const canBlock = (sel.tcp && p.allowed.tcp) || (sel.udp && p.allowed.udp);
+        const busy = busyPort === p.port;
+        const hostProcesses = processNames(p.process);
+
+        return (
+            <tr key={key}>
+                <td>
+                    <div className="port-cell">{p.port}</div>
+                </td>
+
+                <td>
+                    {isEditing ? (
+                        <div className="name-input-wrapper">
+                            <input
+                                type="text"
+                                className="name-input"
+                                value={editName}
+                                maxLength={64}
+                                onChange={(e) => setEditName(e.target.value)}
+                                autoFocus
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') handleEditName(p.port);
+                                    if (e.key === 'Escape') setEditingPort(null);
+                                }}
+                            />
+                            <button onClick={() => handleEditName(p.port)} className="icon-btn icon-success"><Check size={16} /></button>
+                            <button onClick={() => setEditingPort(null)} className="icon-btn icon-danger"><X size={16} /></button>
+                        </div>
+                    ) : (
+                        <div className="name-cell">
+                            <span className={`name-text ${p.customName ? '' : 'unnamed'}`}>
+                                {p.customName || 'Unnamed'}
+                            </span>
+                            <button
+                                onClick={() => {
+                                    setEditingPort(key);
+                                    setEditName(p.customName || '');
+                                }}
+                                className="edit-btn"
+                                title="Rename"
+                            >
+                                <Edit2 size={16} />
+                            </button>
+                        </div>
+                    )}
+                </td>
+
+                <td className="source-col">
+                    {p.docker ? (
+                        <div className="source-cell">
+                            <Box size={16} color="var(--accent-color)" className="source-icon" />
+                            <span className="name-text source-text">{p.docker.name}</span>
+                            <span className="source-tag source-docker">Docker</span>
+                        </div>
+                    ) : hostProcesses ? (
+                        <div className="source-cell">
+                            <Server size={16} color="var(--text-primary)" className="source-icon" />
+                            <span className="name-text source-text" title={p.process}>{hostProcesses}</span>
+                            <span className="source-tag source-host">Host</span>
+                        </div>
+                    ) : (
+                        <span className="name-text unnamed">Inactive</span>
+                    )}
+                </td>
+
+                <td>
+                    <ProtocolBadges flags={p.listening} variant="listening" />
+                </td>
+
+                <td>
+                    <ProtocolBadges flags={p.allowed} variant="allowed" />
+                </td>
+
+                <td style={{ textAlign: 'right' }}>
+                    <div className="action-cell">
+                        <ProtocolSelect
+                            value={selection}
+                            onChange={(v) => setSelections(s => ({ ...s, [p.port]: v }))}
+                            disabled={busy}
+                        />
+                        <button
+                            onClick={() => applyRule(p, 'allow')}
+                            className="btn-toggle allow"
+                            disabled={busy || !canAllow}
+                        >
+                            Allow
+                        </button>
+                        <button
+                            onClick={() => applyRule(p, 'block')}
+                            className="btn-toggle block"
+                            disabled={busy || !canBlock}
+                        >
+                            Block
+                        </button>
+                    </div>
+                </td>
+            </tr>
+        );
+    };
+
+    const manualEntryRow = (
+        <tr className="manual-entry-row" style={{ backgroundColor: 'var(--bg-secondary)', borderTop: '2px dashed var(--border-color)' }}>
+            <td>
+                <div className="port-cell">
+                    <input
+                        type="number"
+                        className="name-input"
+                        placeholder="Port (e.g. 8080)"
+                        min="1"
+                        max="65535"
+                        value={manualPort}
+                        onChange={(e) => setManualPort(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && manualPort && addManualRule()}
+                        style={{ width: '130px' }}
+                    />
+                </div>
+            </td>
+            <td>
+                <span className="unnamed">Manual Entry</span>
+            </td>
+            <td>
+                <span className="name-text unnamed">Inactive</span>
+            </td>
+            <td></td>
+            <td>
+                <div className="pill pill-blocked" style={{ opacity: 0.5 }}>
+                    <span>Pending Rules</span>
+                </div>
+            </td>
+            <td style={{ textAlign: 'right' }}>
+                <div className="action-cell">
+                    <ProtocolSelect value={manualProto} onChange={setManualProto} />
+                    <button
+                        onClick={addManualRule}
+                        className="btn-toggle allow"
+                        disabled={!manualPort || busyPort !== null}
+                    >
+                        Allow
+                    </button>
+                </div>
+            </td>
+        </tr>
+    );
+
+    const renderSection = (section) => {
+        const rows = sortedPorts.filter(section.match);
+        const isCollapsed = !!collapsed[section.id];
+        const Chevron = isCollapsed ? ChevronRight : ChevronDown;
+
+        return (
+            <div className="table-card section-card" key={section.id}>
+                <button
+                    className="section-header"
+                    onClick={() => setCollapsed(c => ({ ...c, [section.id]: !isCollapsed }))}
+                    aria-expanded={!isCollapsed}
+                >
+                    <Chevron size={20} />
+                    <span className="section-title">{section.title}</span>
+                    <span className="section-count">{rows.length}</span>
+                    <span className="section-description">{section.description}</span>
+                </button>
+
+                {!isCollapsed && (
+                    <div className="table-wrapper">
+                        <table>
+                            <thead>
+                                <tr>
+                                    {sortHeader('port', 'Port')}
+                                    {sortHeader('name', 'Name')}
+                                    {sortHeader('source', 'Source')}
+                                    {sortHeader('listening', 'Listening')}
+                                    {sortHeader('ufw', 'UFW Allowed')}
+                                    <th style={{ textAlign: 'right' }}>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {rows.map(renderRow)}
+
+                                {section.id === 'ufw' && manualEntryRow}
+
+                                {rows.length === 0 && section.id !== 'ufw' && (
+                                    <tr>
+                                        <td colSpan="6">
+                                            <div className="empty-state section-empty">No ports in this section</div>
+                                        </td>
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+        );
+    };
+
     if (loading && data.ports.length === 0) {
         return (
             <div className="loader-container">
@@ -251,182 +498,17 @@ const Dashboard = ({ onLogout }) => {
                 </div>
             )}
 
-            <div className="table-card">
-                <div className="table-wrapper">
-                    <table>
-                        <thead>
-                            <tr>
-                                {sortHeader('port', 'Port')}
-                                {sortHeader('name', 'Name')}
-                                {sortHeader('source', 'Source')}
-                                {sortHeader('listening', 'Listening')}
-                                {sortHeader('ufw', 'UFW Allowed')}
-                                <th style={{ textAlign: 'right' }}>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {sortedPorts.map((p) => {
-                                const key = `${p.port}`;
-                                const isEditing = editingPort === key;
-                                const selection = selections[p.port] || defaultSelection(p);
-                                const sel = PROTOCOL_OPTIONS.find(o => o.value === selection);
-                                const canAllow = (sel.tcp && !p.allowed.tcp) || (sel.udp && !p.allowed.udp);
-                                const canBlock = (sel.tcp && p.allowed.tcp) || (sel.udp && p.allowed.udp);
-                                const busy = busyPort === p.port;
-
-                                return (
-                                    <tr key={key}>
-                                        <td>
-                                            <div className="port-cell">{p.port}</div>
-                                        </td>
-
-                                        <td>
-                                            {isEditing ? (
-                                                <div className="name-input-wrapper">
-                                                    <input
-                                                        type="text"
-                                                        className="name-input"
-                                                        value={editName}
-                                                        maxLength={64}
-                                                        onChange={(e) => setEditName(e.target.value)}
-                                                        autoFocus
-                                                        onKeyDown={(e) => {
-                                                            if (e.key === 'Enter') handleEditName(p.port);
-                                                            if (e.key === 'Escape') setEditingPort(null);
-                                                        }}
-                                                    />
-                                                    <button onClick={() => handleEditName(p.port)} className="icon-btn icon-success"><Check size={16} /></button>
-                                                    <button onClick={() => setEditingPort(null)} className="icon-btn icon-danger"><X size={16} /></button>
-                                                </div>
-                                            ) : (
-                                                <div className="name-cell">
-                                                    <span className={`name-text ${p.customName ? '' : 'unnamed'}`}>
-                                                        {p.customName || 'Unnamed'}
-                                                    </span>
-                                                    <button
-                                                        onClick={() => {
-                                                            setEditingPort(key);
-                                                            setEditName(p.customName || '');
-                                                        }}
-                                                        className="edit-btn"
-                                                        title="Rename"
-                                                    >
-                                                        <Edit2 size={16} />
-                                                    </button>
-                                                </div>
-                                            )}
-                                        </td>
-
-                                        <td>
-                                            {p.docker ? (
-                                                <div className="source-cell">
-                                                    <Box size={16} color="var(--accent-color)" />
-                                                    <span className="name-text truncate" title={p.docker.name}>{p.docker.name}</span>
-                                                    <span className="source-tag source-docker">Docker</span>
-                                                </div>
-                                            ) : p.process ? (
-                                                <div className="source-cell">
-                                                    <Server size={16} color="var(--text-primary)" />
-                                                    <span className="name-text truncate" title={p.process}>{p.process.split(' ')[0]}</span>
-                                                    <span className="source-tag source-host">Host</span>
-                                                </div>
-                                            ) : (
-                                                <span className="name-text unnamed">Inactive</span>
-                                            )}
-                                        </td>
-
-                                        <td>
-                                            <ProtocolBadges flags={p.listening} variant="listening" />
-                                        </td>
-
-                                        <td>
-                                            <ProtocolBadges flags={p.allowed} variant="allowed" />
-                                        </td>
-
-                                        <td style={{ textAlign: 'right' }}>
-                                            <div className="action-cell">
-                                                <ProtocolSelect
-                                                    value={selection}
-                                                    onChange={(v) => setSelections(s => ({ ...s, [p.port]: v }))}
-                                                    disabled={busy}
-                                                />
-                                                <button
-                                                    onClick={() => applyRule(p, 'allow')}
-                                                    className="btn-toggle allow"
-                                                    disabled={busy || !canAllow}
-                                                >
-                                                    Allow
-                                                </button>
-                                                <button
-                                                    onClick={() => applyRule(p, 'block')}
-                                                    className="btn-toggle block"
-                                                    disabled={busy || !canBlock}
-                                                >
-                                                    Block
-                                                </button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                );
-                            })}
-
-                            <tr className="manual-entry-row" style={{ backgroundColor: 'var(--bg-secondary)', borderTop: '2px dashed var(--border-color)' }}>
-                                <td>
-                                    <div className="port-cell">
-                                        <input
-                                            type="number"
-                                            className="name-input"
-                                            placeholder="Port (e.g. 8080)"
-                                            min="1"
-                                            max="65535"
-                                            value={manualPort}
-                                            onChange={(e) => setManualPort(e.target.value)}
-                                            onKeyDown={(e) => e.key === 'Enter' && manualPort && addManualRule()}
-                                            style={{ width: '130px' }}
-                                        />
-                                    </div>
-                                </td>
-                                <td>
-                                    <span className="unnamed">Manual Entry</span>
-                                </td>
-                                <td>
-                                    <span className="name-text unnamed">Inactive</span>
-                                </td>
-                                <td></td>
-                                <td>
-                                    <div className="pill pill-blocked" style={{ opacity: 0.5 }}>
-                                        <span>Pending Rules</span>
-                                    </div>
-                                </td>
-                                <td style={{ textAlign: 'right' }}>
-                                    <div className="action-cell">
-                                        <ProtocolSelect value={manualProto} onChange={setManualProto} />
-                                        <button
-                                            onClick={addManualRule}
-                                            className="btn-toggle allow"
-                                            disabled={!manualPort || busyPort !== null}
-                                        >
-                                            Allow
-                                        </button>
-                                    </div>
-                                </td>
-                            </tr>
-
-                            {data.ports.length === 0 && !loading && (
-                                <tr>
-                                    <td colSpan="6">
-                                        <div className="empty-state">
-                                            <Shield className="empty-icon" />
-                                            <p style={{ fontSize: '1.125rem', color: 'var(--text-primary)' }}>No ports found</p>
-                                            <p>Make sure UFW and host scanning are correctly configured.</p>
-                                        </div>
-                                    </td>
-                                </tr>
-                            )}
-                        </tbody>
-                    </table>
+            {data.ports.length === 0 && !loading && (
+                <div className="table-card section-card">
+                    <div className="empty-state">
+                        <Shield className="empty-icon" />
+                        <p style={{ fontSize: '1.125rem', color: 'var(--text-primary)' }}>No ports found</p>
+                        <p>Make sure UFW and host scanning are correctly configured.</p>
+                    </div>
                 </div>
-            </div>
+            )}
+
+            {SECTIONS.map(renderSection)}
         </div>
     );
 };

@@ -704,3 +704,82 @@ tr:hover .edit-btn {
     resize: none;
     word-break: break-all;
 }
+
+/* Collapsible dashboard sections */
+.section-card {
+    margin-bottom: 1.5rem;
+}
+
+.section-header {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem 0.75rem;
+    width: 100%;
+    padding: 1rem 1.25rem;
+    background: var(--bg-secondary);
+    border: none;
+    color: var(--text-primary);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.section-header:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.section-title {
+    font-size: 1.125rem;
+    font-weight: 600;
+}
+
+.section-count {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.1rem 0.5rem;
+    border-radius: 1rem;
+    background: var(--bg-color);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+}
+
+.section-description {
+    flex-basis: 100%;
+    padding-left: 2rem;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.section-card .table-wrapper {
+    border-top: 1px solid var(--border-color);
+}
+
+.section-empty {
+    padding: 1.5rem;
+    font-style: italic;
+}
+
+/* Source column wraps instead of truncating */
+.source-col {
+    max-width: 320px;
+}
+
+.source-col .source-cell {
+    align-items: flex-start;
+}
+
+.source-icon {
+    flex-shrink: 0;
+    margin-top: 0.125rem;
+}
+
+.source-text {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    min-width: 0;
+}
+
+.source-col .source-tag {
+    flex-shrink: 0;
+}
