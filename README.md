@@ -28,10 +28,12 @@ sudo chown -R portwarden:portwarden /home/portwarden/.ssh
 sudo chmod 700 /home/portwarden/.ssh && sudo chmod 600 /home/portwarden/.ssh/authorized_keys
 
 # Add with: sudo visudo -f /etc/sudoers.d/portwarden
-portwarden ALL=(ALL) NOPASSWD: /usr/sbin/ufw, /usr/sbin/ss
+portwarden ALL=(ALL) NOPASSWD: /usr/sbin/ufw, /usr/bin/ss, /usr/sbin/ss
 ```
 
-3. Back in Settings, set the SSH username to `portwarden`, leave the key path as the generated key, and save.
+`ss` is at `/usr/bin/ss` on Ubuntu/Debian and `/usr/sbin/ss` on some other distros. Listing both is harmless. Check yours with `command -v ss`.
+
+3. Back in Settings, set the Host IP to the server's LAN address (for example `192.168.1.3`), set the SSH username to `portwarden`, leave the key path as the generated key, and save. The Docker bridge address (`172.17.0.1`) is often blocked by UFW.
 
 ## Using it
 
